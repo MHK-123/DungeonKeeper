@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 # Bot configuration
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "your_bot_token_here")
-STAFF_CHANNEL_ID = int(os.getenv("STAFF_CHANNEL_ID", "0"))
+STAFF_CHANNEL_ID = 1410225154239238184  # Hardcoded report channel ID
 
 class DungeonKeeper(commands.Bot):
     def __init__(self):
@@ -59,14 +59,6 @@ class DungeonKeeper(commands.Bot):
                 "What's a skill you'd love to master?",
                 "What motivates you to keep studying?"
             ]
-        
-        try:
-            with open('config.json', 'r') as f:
-                config = json.load(f)
-                global STAFF_CHANNEL_ID
-                STAFF_CHANNEL_ID = config.get('staff_channel_id', STAFF_CHANNEL_ID)
-        except FileNotFoundError:
-            pass
 
     async def setup_hook(self):
         """Sync slash commands when bot starts"""
@@ -131,16 +123,10 @@ class DungeonKeeper(commands.Bot):
         """Process the actual support case after user clicks proceed"""
         user_id = message.author.id
         
-        # Get staff channel from environment variable
-        staff_channel_id = int(os.getenv("STAFF_CHANNEL_ID", "0"))
-        
-        if staff_channel_id == 0:
-            await message.author.send("❌ Staff support is not configured. Please contact an administrator.")
-            return
-        
-        staff_channel = self.get_channel(staff_channel_id)
+        # Use hardcoded staff channel ID
+        staff_channel = self.get_channel(STAFF_CHANNEL_ID)
         if not staff_channel:
-            logger.error(f"Staff channel {staff_channel_id} not found")
+            logger.error(f"Staff channel {STAFF_CHANNEL_ID} not found")
             await message.author.send("❌ Unable to reach staff team. Please try again later.")
             return
         
@@ -169,8 +155,8 @@ class DungeonKeeper(commands.Bot):
                 inline=False
             )
         
-        # Send to staff channel and create thread
-        staff_message = await staff_channel.send(embed=embed)
+        # Send to staff channel with @everyone ping and create thread
+        staff_message = await staff_channel.send("@everyone", embed=embed)
         thread = await staff_message.create_thread(
             name=f"Case #{case_id} - {message.author.display_name}",
             auto_archive_duration=1440  # 24 hours
@@ -587,101 +573,86 @@ async def show_rank(interaction: discord.Interaction):
     
     embed = discord.Embed(
         title="📊 XP Leaderboard",
-        description="Top study champions:",
+        description="Top study warriors in the server!",
         color=discord.Color.gold()
     )
     
     for i, (user_id, xp) in enumerate(sorted_users[:10], 1):
         user = bot.get_user(user_id)
-        username = user.display_name if user else f"User {user_id}"
-        
-        medals = ["🥇", "🥈", "🥉"]
-        medal = medals[i-1] if i <= 3 else f"{i}."
-        
-        embed.add_field(
-            name=f"{medal} {username}",
-            value=f"{xp} XP",
-            inline=False
-        )
-    
-    # Show current user's rank if not in top 10
-    user_id = interaction.user.id
-    if user_id in bot.user_xp:
-        user_rank = next((i for i, (uid, _) in enumerate(sorted_users, 1) if uid == user_id), None)
-        if user_rank and user_rank > 10:
+        if user:
+            rank_emoji = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
             embed.add_field(
-                name=f"Your Rank: #{user_rank}",
-                value=f"{bot.user_xp[user_id]} XP",
-                inline=False
+                name=f"{rank_emoji} {user.display_name}",
+                value=f"{xp} XP",
+                inline=True
             )
     
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="remindme", description="Set a reminder")
+@bot.tree.command(name="remindme", description="Set a personal reminder")
 @discord.app_commands.describe(
-    time="Time in minutes",
-    message="Reminder message"
+    time="Time until reminder (e.g., 30m, 2h, 1d)",
+    message="What to remind you about"
 )
-async def remind_me(interaction: discord.Interaction, time: int, message: str):
-    """Set a reminder"""
-    if time < 1 or time > 10080:  # Max 1 week
-        await interaction.response.send_message("Reminder time must be between 1 minute and 1 week (10080 minutes).", ephemeral=True)
-        return
-    
-    if len(message) > 500:
-        await interaction.response.send_message("Reminder message must be 500 characters or less.", ephemeral=True)
-        return
-    
-    embed = discord.Embed(
-        title="⏰ Reminder Set",
-        description=f"I'll remind you in {time} minute(s):\n*{message}*",
-        color=discord.Color.blue(),
-        timestamp=datetime.utcnow() + timedelta(minutes=time)
-    )
-    embed.set_footer(text="Reminder time")
-    
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-    
-    # Schedule reminder
-    asyncio.create_task(send_reminder(interaction.user, message, time))
-
-async def send_reminder(user: discord.User, message: str, minutes: int):
-    """Send a reminder after the specified time"""
+async def remind_me(interaction: discord.Interaction, time: str, message: str):
+    """Set a personal reminder"""
     try:
-        await asyncio.sleep(minutes * 60)
+        # Parse time string
+        time_units = {'m': 60, 'h': 3600, 'd': 86400}
+        unit = time[-1].lower()
+        
+        if unit not in time_units:
+            await interaction.response.send_message("Invalid time format. Use 'm' for minutes, 'h' for hours, 'd' for days.", ephemeral=True)
+            return
+        
+        amount = int(time[:-1])
+        seconds = amount * time_units[unit]
+        
+        # Check reasonable limits
+        if seconds < 60:  # minimum 1 minute
+            await interaction.response.send_message("Minimum reminder time is 1 minute.", ephemeral=True)
+            return
+        
+        if seconds > 604800:  # maximum 1 week
+            await interaction.response.send_message("Maximum reminder time is 1 week.", ephemeral=True)
+            return
+        
+        # Set reminder
+        reminder_time = datetime.utcnow() + timedelta(seconds=seconds)
+        
+        embed = discord.Embed(
+            title="⏰ Reminder Set",
+            description=f"I'll remind you about: **{message}**",
+            color=discord.Color.blue()
+        )
+        embed.add_field(name="Time", value=f"In {time}", inline=True)
+        embed.add_field(name="When", value=f"<t:{int(reminder_time.timestamp())}:F>", inline=True)
+        
+        await interaction.response.send_message(embed=embed)
+        
+        # Schedule reminder
+        asyncio.create_task(send_reminder(interaction.user, message, seconds))
+        
+    except ValueError:
+        await interaction.response.send_message("Invalid time format. Example: 30m, 2h, 1d", ephemeral=True)
+
+async def send_reminder(user: discord.User, message: str, delay: int):
+    """Send a reminder after the specified delay"""
+    try:
+        await asyncio.sleep(delay)
         
         embed = discord.Embed(
             title="⏰ Reminder",
-            description=message,
+            description=f"You asked me to remind you:\n\n**{message}**",
             color=discord.Color.yellow(),
             timestamp=datetime.utcnow()
         )
-        embed.set_footer(text=f"Reminder from {minutes} minute(s) ago")
         
         await user.send(embed=embed)
         
     except Exception as e:
         logger.error(f"Error sending reminder: {e}")
 
-# Error handlers
-@bot.tree.error
-async def on_app_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
-    """Handle slash command errors"""
-    if isinstance(error, discord.app_commands.CheckFailure):
-        await interaction.response.send_message("You need to be in a voice channel to use this command.", ephemeral=True)
-    elif isinstance(error, discord.app_commands.MissingPermissions):
-        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
-    else:
-        logger.error(f"Unexpected error: {error}")
-        if not interaction.response.is_done():
-            await interaction.response.send_message("An unexpected error occurred.", ephemeral=True)
-
+# Run the bot
 if __name__ == "__main__":
-    if DISCORD_TOKEN == "your_bot_token_here":
-        print("Please set the DISCORD_TOKEN environment variable!")
-        print("You can get a bot token from https://discord.com/developers/applications")
-        exit(1)
-    
-    print("Starting DungeonKeeper Discord Bot...")
-    print("Make sure to set the STAFF_CHANNEL_ID in your config.json or environment variables!")
     bot.run(DISCORD_TOKEN)
