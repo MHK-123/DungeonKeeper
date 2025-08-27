@@ -1,0 +1,15 @@
+{
+    "staff_channel_id": 0,
+    "bot_settings": {
+        "command_prefix": "!",
+        "max_reminder_time": 10080,
+        "max_pomodoro_focus": 120,
+        "max_pomodoro_break": 60,
+        "xp_per_pomodoro": 10
+    },
+    "permissions": {
+        "staff_commands": ["reply", "close"],
+        "voice_commands": ["forcemute", "private", "public", "max", "desc", "invite"],
+        "study_commands": ["topic", "studyquote", "pomodoro", "rank", "remindme"]
+    }
+}
