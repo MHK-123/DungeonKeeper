@@ -1,29 +1,35 @@
 name: DungeonKeeper Bot
 
 on:
-  push:
-    branches: [ main ]
-  workflow_dispatch:
+  workflow_dispatch:       # manual start
+  schedule:
+    - cron: "*/30 * * * *" # restart every 30 minutes
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 350   # max GitHub allows (~6h)
+
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
-    
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install discord.py python-dotenv
-    
-    - name: Run bot
-      env:
-        DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
-        STAFF_CHANNEL_ID: ${{ secrets.STAFF_CHANNEL_ID }}
-      run: python main.py
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt || \
+          pip install discord.py python-dotenv
+
+      - name: Run Discord Bot
+        env:
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          STAFF_CHANNEL_ID: ${{ secrets.STAFF_CHANNEL_ID }}
+        run: |
+          echo "🚀 Starting DungeonKeeper..."
+          python main.py
