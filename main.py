@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 # Bot configuration
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "your_bot_token_here")
-STAFF_CHANNEL_ID = 1410225154239238184  # Hardcoded report channel ID
+STAFF_CHANNEL_ID = int(os.getenv("STAFF_CHANNEL_ID", "1410225154239238184"))  # Hardcoded report channel ID
 
 class DungeonKeeper(commands.Bot):
     def __init__(self):
@@ -31,6 +31,7 @@ class DungeonKeeper(commands.Bot):
         self.user_xp: Dict[int, int] = {}  # user_id -> xp
         self.active_timers: Dict[int, Dict] = {}  # user_id -> timer_data
         self.pending_cases: Dict[int, bool] = {}  # user_id -> waiting for case description
+        self.reminders: Dict[int, List[Dict]] = {}  # user_id -> list of reminders
         self.case_counter = 1
         
         # Load configuration and data
@@ -77,10 +78,13 @@ class DungeonKeeper(commands.Bot):
         await self.change_presence(
             status=discord.Status.online,
             activity=discord.Activity(
-                type=discord.ActivityType.watching, 
+                type=discord.ActivityType.watching,
                 name="for support requests"
             )
         )
+        
+        # Start reminder task
+        self.check_reminders.start()
 
     async def on_message(self, message):
         """Handle DM messages for staff support"""
@@ -101,7 +105,7 @@ class DungeonKeeper(commands.Bot):
             await self.process_support_case(message)
         else:
             await self.start_support_flow(message)
-    
+
     async def start_support_flow(self, message):
         """Start the interactive support flow"""
         embed = discord.Embed(
@@ -127,7 +131,7 @@ class DungeonKeeper(commands.Bot):
         # Create proceed button
         view = SupportStartView(self)
         await message.author.send(embed=embed, view=view)
-    
+
     async def process_support_case(self, message):
         """Process the actual support case after user clicks proceed"""
         user_id = message.author.id
@@ -150,6 +154,7 @@ class DungeonKeeper(commands.Bot):
             color=discord.Color.orange(),
             timestamp=datetime.utcnow()
         )
+        
         embed.set_author(
             name=f"{message.author.display_name} ({message.author.id})",
             icon_url=message.author.avatar.url if message.author.avatar else None
@@ -189,15 +194,41 @@ class DungeonKeeper(commands.Bot):
             color=discord.Color.green()
         )
         confirm_embed.set_footer(text="You'll receive updates about your case here in DMs")
-        
         await message.author.send(embed=confirm_embed)
+
+    @tasks.loop(minutes=1)
+    async def check_reminders(self):
+        """Check and send reminders"""
+        current_time = datetime.utcnow()
+        
+        for user_id, reminders in list(self.reminders.items()):
+            for reminder in list(reminders):
+                if current_time >= reminder['time']:
+                    user = self.get_user(user_id)
+                    if user:
+                        try:
+                            embed = discord.Embed(
+                                title="⏰ Reminder",
+                                description=reminder['message'],
+                                color=discord.Color.blue(),
+                                timestamp=current_time
+                            )
+                            embed.set_footer(text=f"Set {reminder['set_time'].strftime('%Y-%m-%d %H:%M:%S')} UTC")
+                            await user.send(embed=embed)
+                        except discord.Forbidden:
+                            pass
+                    
+                    reminders.remove(reminder)
+            
+            if not reminders:
+                del self.reminders[user_id]
 
 # Support System UI Components
 class SupportStartView(discord.ui.View):
     def __init__(self, bot):
         super().__init__(timeout=300)  # 5 minute timeout
         self.bot = bot
-    
+
     @discord.ui.button(label="📝 Start Support Request", style=discord.ButtonStyle.primary, emoji="🚀")
     async def start_support(self, interaction: discord.Interaction, button: discord.ui.Button):
         # Mark user as ready to submit their case
@@ -208,6 +239,7 @@ class SupportStartView(discord.ui.View):
             description="Perfect! Now please describe your issue or question in detail.\n\nI'll forward it to our staff team right away.",
             color=discord.Color.green()
         )
+        
         embed.add_field(
             name="💡 Tips for better support:",
             value="• Be specific about the problem\n• Include any error messages\n• Mention what you were trying to do\n• Add screenshots if helpful",
@@ -215,13 +247,13 @@ class SupportStartView(discord.ui.View):
         )
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
-    
+
     @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.secondary)
     async def cancel_support(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = discord.Embed(
             title="✋ Support Cancelled",
             description="No problem! If you need help later, just send me another message.",
-            color=discord.Color.gray()
+            color=discord.Color.light_grey()
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -262,7 +294,7 @@ async def reply_case(interaction: discord.Interaction, case: int, message: str):
         thread = bot.get_channel(case_data['thread_id'])
         if thread:
             await thread.send(f"**Reply sent by {interaction.user.mention}:**\n{message}")
-            
+    
     except discord.Forbidden:
         await interaction.response.send_message("Could not send DM to user. They may have DMs disabled.", ephemeral=True)
 
@@ -304,8 +336,8 @@ async def close_case(interaction: discord.Interaction, case: int):
 # Voice Channel Management Commands
 def in_voice_channel():
     """Decorator to check if user is in a voice channel"""
-    def predicate(interaction: discord.Interaction):
-        return interaction.user.voice and interaction.user.voice.channel
+    def predicate(interaction: discord.Interaction) -> bool:
+        return bool(interaction.user.voice and interaction.user.voice.channel)
     return discord.app_commands.check(predicate)
 
 @bot.tree.command(name="forcemute", description="Mute all members in your current voice channel")
@@ -374,7 +406,7 @@ async def make_public(interaction: discord.Interaction):
 @discord.app_commands.describe(number="Maximum number of members (0 for unlimited)")
 @in_voice_channel()
 async def set_max_members(interaction: discord.Interaction, number: int):
-    """Set the maximum member limit for the voice channel"""
+    """Set maximum member limit for voice channel"""
     if number < 0 or number > 99:
         await interaction.response.send_message("Member limit must be between 0 and 99.", ephemeral=True)
         return
@@ -385,7 +417,7 @@ async def set_max_members(interaction: discord.Interaction, number: int):
         await interaction.response.send_message("I don't have permission to modify this channel.", ephemeral=True)
         return
     
-    await voice_channel.edit(user_limit=number if number > 0 else None)
+    await voice_channel.edit(user_limit=number)
     
     if number == 0:
         await interaction.response.send_message(f"Removed member limit from {voice_channel.name}")
@@ -393,66 +425,67 @@ async def set_max_members(interaction: discord.Interaction, number: int):
         await interaction.response.send_message(f"Set member limit to {number} for {voice_channel.name}")
 
 @bot.tree.command(name="desc", description="Set description for your voice channel")
-@discord.app_commands.describe(text="Channel description/topic")
+@discord.app_commands.describe(description="Channel description/topic")
 @in_voice_channel()
-async def set_description(interaction: discord.Interaction, text: str):
-    """Set the voice channel description"""
+async def set_description(interaction: discord.Interaction, description: str):
+    """Set description for voice channel"""
     voice_channel = interaction.user.voice.channel
     
     if not voice_channel.permissions_for(interaction.guild.me).manage_channels:
         await interaction.response.send_message("I don't have permission to modify this channel.", ephemeral=True)
         return
     
-    await voice_channel.edit(topic=text)
+    await voice_channel.edit(topic=description)
     await interaction.response.send_message(f"Updated description for {voice_channel.name}")
 
-@bot.tree.command(name="invite", description="Invite a user to your voice channel")
-@discord.app_commands.describe(user="User to invite to your voice channel")
+@bot.tree.command(name="invite", description="Send voice channel invite to a user")
+@discord.app_commands.describe(user="User to invite")
 @in_voice_channel()
 async def invite_user(interaction: discord.Interaction, user: discord.Member):
-    """Send a voice channel invite to a user"""
+    """Send DM invite to user for voice channel"""
     voice_channel = interaction.user.voice.channel
     
-    if user.voice and user.voice.channel == voice_channel:
-        await interaction.response.send_message(f"{user.mention} is already in your voice channel!", ephemeral=True)
+    if not voice_channel.permissions_for(interaction.guild.me).create_instant_invite:
+        await interaction.response.send_message("I don't have permission to create invites.", ephemeral=True)
         return
     
     try:
-        invite = await voice_channel.create_invite(max_uses=1, max_age=3600)
+        invite = await voice_channel.create_invite(max_uses=1, max_age=3600)  # 1 hour
         
         embed = discord.Embed(
-            title="Voice Channel Invitation",
-            description=f"{interaction.user.mention} has invited you to join **{voice_channel.name}**",
+            title="🎙️ Voice Channel Invitation",
+            description=f"{interaction.user.display_name} has invited you to join a voice channel!",
             color=discord.Color.blue()
         )
-        embed.add_field(name="Join Link", value=f"[Click here to join]({invite.url})", inline=False)
+        embed.add_field(name="Channel", value=voice_channel.name, inline=True)
+        embed.add_field(name="Server", value=interaction.guild.name, inline=True)
+        embed.add_field(name="Invite Link", value=invite.url, inline=False)
         embed.set_footer(text="This invite expires in 1 hour")
         
         await user.send(embed=embed)
-        await interaction.response.send_message(f"Sent voice channel invite to {user.mention}", ephemeral=True)
+        await interaction.response.send_message(f"Sent voice channel invite to {user.display_name}", ephemeral=True)
         
     except discord.Forbidden:
-        await interaction.response.send_message(f"Could not send DM to {user.mention}. They may have DMs disabled.", ephemeral=True)
-    except Exception as e:
-        await interaction.response.send_message(f"Failed to create invite: {str(e)}", ephemeral=True)
+        await interaction.response.send_message(f"Could not send DM to {user.display_name}. They may have DMs disabled.", ephemeral=True)
 
-# Study and Fun Commands
-@bot.tree.command(name="topic", description="Get a random conversation topic or study question")
+# Study & Productivity Commands
+@bot.tree.command(name="topic", description="Get a random conversation starter or discussion topic")
 async def random_topic(interaction: discord.Interaction):
-    """Send a random topic or question"""
+    """Get a random conversation topic"""
     topic = random.choice(bot.topics)
     
     embed = discord.Embed(
-        title="💭 Random Topic",
+        title="💬 Discussion Topic",
         description=topic,
         color=discord.Color.purple()
     )
+    embed.set_footer(text="Great conversations start with great questions!")
     
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="studyquote", description="Get a motivational study quote")
 async def study_quote(interaction: discord.Interaction):
-    """Send a motivational study quote"""
+    """Get a motivational study quote"""
     quote = random.choice(bot.study_quotes)
     
     embed = discord.Embed(
@@ -460,17 +493,18 @@ async def study_quote(interaction: discord.Interaction):
         description=f"*\"{quote}\"*",
         color=discord.Color.gold()
     )
+    embed.set_footer(text="Keep pushing forward! 💪")
     
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="pomodoro", description="Start a Pomodoro timer")
+@bot.tree.command(name="pomodoro", description="Start a pomodoro timer")
 @discord.app_commands.describe(
-    focus="Focus time in minutes (default: 25)",
+    focus_time="Focus time in minutes (default: 25)",
     break_time="Break time in minutes (default: 5)"
 )
-async def pomodoro(interaction: discord.Interaction, focus: int = 25, break_time: int = 5):
-    """Start a Pomodoro timer"""
-    if focus < 1 or focus > 120:
+async def pomodoro_timer(interaction: discord.Interaction, focus_time: int = 25, break_time: int = 5):
+    """Start a pomodoro timer"""
+    if focus_time < 1 or focus_time > 120:
         await interaction.response.send_message("Focus time must be between 1 and 120 minutes.", ephemeral=True)
         return
     
@@ -481,81 +515,80 @@ async def pomodoro(interaction: discord.Interaction, focus: int = 25, break_time
     user_id = interaction.user.id
     
     if user_id in bot.active_timers:
-        await interaction.response.send_message("You already have an active timer! Use `/stoptimer` to cancel it.", ephemeral=True)
+        await interaction.response.send_message("You already have an active timer! Use `/stoptimer` to stop it first.", ephemeral=True)
         return
     
     # Store timer data
     bot.active_timers[user_id] = {
-        'focus_time': focus,
+        'focus_time': focus_time,
         'break_time': break_time,
-        'phase': 'focus',
-        'start_time': datetime.utcnow()
+        'start_time': datetime.utcnow(),
+        'phase': 'focus'
     }
     
     embed = discord.Embed(
         title="🍅 Pomodoro Timer Started",
-        description=f"Focus time: {focus} minutes\nBreak time: {break_time} minutes",
-        color=discord.Color.red()
+        description=f"Focus time: **{focus_time} minutes**\nBreak time: **{break_time} minutes**\n\nStay focused! I'll notify you when it's time for a break.",
+        color=discord.Color.red(),
+        timestamp=datetime.utcnow()
     )
-    embed.add_field(name="Current Phase", value="🎯 Focus Time", inline=False)
     embed.set_footer(text="Good luck with your study session!")
     
     await interaction.response.send_message(embed=embed)
     
-    # Schedule timer notifications
-    asyncio.create_task(run_pomodoro_timer(interaction.user, focus, break_time))
-
-async def run_pomodoro_timer(user: discord.User, focus_minutes: int, break_minutes: int):
-    """Run the Pomodoro timer cycle"""
-    try:
-        # Focus phase
-        await asyncio.sleep(focus_minutes * 60)
+    # Schedule focus completion
+    await asyncio.sleep(focus_time * 60)
+    
+    if user_id in bot.active_timers:
+        # Award XP
+        if user_id not in bot.user_xp:
+            bot.user_xp[user_id] = 0
+        bot.user_xp[user_id] += 10
         
-        if user.id not in bot.active_timers:
-            return  # Timer was cancelled
-        
-        # Focus time ended
         embed = discord.Embed(
             title="⏰ Focus Time Complete!",
-            description=f"Great job! Take a {break_minutes}-minute break.",
+            description=f"Great job! You focused for {focus_time} minutes.\n\n**+10 XP earned!**\nTotal XP: {bot.user_xp[user_id]}\n\nTake a {break_time} minute break!",
             color=discord.Color.green()
         )
-        embed.add_field(name="Next Phase", value="☕ Break Time", inline=False)
         
-        await user.send(embed=embed)
+        try:
+            await interaction.followup.send(embed=embed)
+        except:
+            user = bot.get_user(user_id)
+            if user:
+                try:
+                    await user.send(embed=embed)
+                except:
+                    pass
         
         # Update timer phase
-        bot.active_timers[user.id]['phase'] = 'break'
+        bot.active_timers[user_id]['phase'] = 'break'
         
-        # Break phase
-        await asyncio.sleep(break_minutes * 60)
+        # Schedule break completion
+        await asyncio.sleep(break_time * 60)
         
-        if user.id not in bot.active_timers:
-            return  # Timer was cancelled
-        
-        # Break time ended
-        embed = discord.Embed(
-            title="⏰ Break Time Complete!",
-            description="Time to get back to work! Ready for another focus session?",
-            color=discord.Color.blue()
-        )
-        
-        await user.send(embed=embed)
-        
-        # Award XP for completing a Pomodoro cycle
-        bot.user_xp[user.id] = bot.user_xp.get(user.id, 0) + 10
-        
-        # Clean up timer
-        del bot.active_timers[user.id]
-        
-    except Exception as e:
-        logger.error(f"Error in Pomodoro timer: {e}")
-        if user.id in bot.active_timers:
-            del bot.active_timers[user.id]
+        if user_id in bot.active_timers:
+            embed = discord.Embed(
+                title="☕ Break Time Over!",
+                description="Break time is over. Ready for another focus session?",
+                color=discord.Color.blue()
+            )
+            
+            try:
+                await interaction.followup.send(embed=embed)
+            except:
+                user = bot.get_user(user_id)
+                if user:
+                    try:
+                        await user.send(embed=embed)
+                    except:
+                        pass
+            
+            del bot.active_timers[user_id]
 
-@bot.tree.command(name="stoptimer", description="Stop your active Pomodoro timer")
+@bot.tree.command(name="stoptimer", description="Stop your active pomodoro timer")
 async def stop_timer(interaction: discord.Interaction):
-    """Stop the active Pomodoro timer"""
+    """Stop active pomodoro timer"""
     user_id = interaction.user.id
     
     if user_id not in bot.active_timers:
@@ -565,103 +598,120 @@ async def stop_timer(interaction: discord.Interaction):
     del bot.active_timers[user_id]
     await interaction.response.send_message("⏹️ Timer stopped.", ephemeral=True)
 
-@bot.tree.command(name="rank", description="View the XP leaderboard")
-async def show_rank(interaction: discord.Interaction):
-    """Show XP leaderboard"""
-    if not bot.user_xp:
-        embed = discord.Embed(
-            title="📊 XP Leaderboard",
-            description="No one has earned XP yet! Complete Pomodoro sessions to earn points.",
-            color=discord.Color.orange()
-        )
-        await interaction.response.send_message(embed=embed)
-        return
+@bot.tree.command(name="rank", description="Check your XP ranking")
+async def check_rank(interaction: discord.Interaction):
+    """Check XP ranking"""
+    user_id = interaction.user.id
+    user_xp = bot.user_xp.get(user_id, 0)
     
     # Sort users by XP
     sorted_users = sorted(bot.user_xp.items(), key=lambda x: x[1], reverse=True)
     
+    # Find user's rank
+    user_rank = None
+    for i, (uid, xp) in enumerate(sorted_users):
+        if uid == user_id:
+            user_rank = i + 1
+            break
+    
+    if user_rank is None:
+        user_rank = "Unranked"
+    
     embed = discord.Embed(
-        title="📊 XP Leaderboard",
-        description="Top study warriors in the server!",
+        title="📊 Your Study Ranking",
         color=discord.Color.gold()
     )
     
-    for i, (user_id, xp) in enumerate(sorted_users[:10], 1):
-        user = bot.get_user(user_id)
-        if user:
-            rank_emoji = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"{i}."
-            embed.add_field(
-                name=f"{rank_emoji} {user.display_name}",
-                value=f"{xp} XP",
-                inline=True
-            )
+    embed.add_field(name="Your XP", value=f"**{user_xp}** XP", inline=True)
+    embed.add_field(name="Your Rank", value=f"**#{user_rank}**", inline=True)
+    embed.add_field(name="Total Users", value=f"**{len(sorted_users)}**", inline=True)
+    
+    # Show top 5 users
+    leaderboard = ""
+    for i, (uid, xp) in enumerate(sorted_users[:5]):
+        user = bot.get_user(uid)
+        name = user.display_name if user else f"User {uid}"
+        leaderboard += f"{i+1}. **{name}** - {xp} XP\n"
+    
+    if leaderboard:
+        embed.add_field(name="🏆 Top 5 Leaderboard", value=leaderboard, inline=False)
+    
+    embed.set_footer(text="Keep studying to climb the ranks!")
     
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="remindme", description="Set a personal reminder")
 @discord.app_commands.describe(
-    time="Time until reminder (e.g., 30m, 2h, 1d)",
-    message="What to remind you about"
+    time="Time until reminder (e.g., '30m', '2h', '1d')",
+    message="Reminder message"
 )
 async def remind_me(interaction: discord.Interaction, time: str, message: str):
     """Set a personal reminder"""
     try:
-        # Parse time string
-        time_units = {'m': 60, 'h': 3600, 'd': 86400}
-        unit = time[-1].lower()
+        # Parse time
+        time = time.lower().strip()
+        if time.endswith('m'):
+            minutes = int(time[:-1])
+            if minutes < 1 or minutes > 10080:  # 1 week in minutes
+                raise ValueError("Minutes must be between 1 and 10080 (1 week)")
+            delta = timedelta(minutes=minutes)
+        elif time.endswith('h'):
+            hours = int(time[:-1])
+            if hours < 1 or hours > 168:  # 1 week in hours
+                raise ValueError("Hours must be between 1 and 168 (1 week)")
+            delta = timedelta(hours=hours)
+        elif time.endswith('d'):
+            days = int(time[:-1])
+            if days < 1 or days > 7:
+                raise ValueError("Days must be between 1 and 7")
+            delta = timedelta(days=days)
+        else:
+            raise ValueError("Time format must end with 'm', 'h', or 'd'")
         
-        if unit not in time_units:
-            await interaction.response.send_message("Invalid time format. Use 'm' for minutes, 'h' for hours, 'd' for days.", ephemeral=True)
-            return
+        reminder_time = datetime.utcnow() + delta
         
-        amount = int(time[:-1])
-        seconds = amount * time_units[unit]
+        # Store reminder
+        user_id = interaction.user.id
+        if user_id not in bot.reminders:
+            bot.reminders[user_id] = []
         
-        # Check reasonable limits
-        if seconds < 60:  # minimum 1 minute
-            await interaction.response.send_message("Minimum reminder time is 1 minute.", ephemeral=True)
-            return
-        
-        if seconds > 604800:  # maximum 1 week
-            await interaction.response.send_message("Maximum reminder time is 1 week.", ephemeral=True)
-            return
-        
-        # Set reminder
-        reminder_time = datetime.utcnow() + timedelta(seconds=seconds)
+        bot.reminders[user_id].append({
+            'time': reminder_time,
+            'message': message,
+            'set_time': datetime.utcnow()
+        })
         
         embed = discord.Embed(
             title="⏰ Reminder Set",
-            description=f"I'll remind you about: **{message}**",
-            color=discord.Color.blue()
+            description=f"I'll remind you in **{time}** with the message:\n\n*\"{message}\"*",
+            color=discord.Color.green(),
+            timestamp=reminder_time
         )
-        embed.add_field(name="Time", value=f"In {time}", inline=True)
-        embed.add_field(name="When", value=f"<t:{int(reminder_time.timestamp())}:F>", inline=True)
+        embed.set_footer(text="You'll be reminded at")
         
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
         
-        # Schedule reminder
-        asyncio.create_task(send_reminder(interaction.user, message, seconds))
-        
-    except ValueError:
-        await interaction.response.send_message("Invalid time format. Example: 30m, 2h, 1d", ephemeral=True)
-
-async def send_reminder(user: discord.User, message: str, delay: int):
-    """Send a reminder after the specified delay"""
-    try:
-        await asyncio.sleep(delay)
-        
-        embed = discord.Embed(
-            title="⏰ Reminder",
-            description=f"You asked me to remind you:\n\n**{message}**",
-            color=discord.Color.yellow(),
-            timestamp=datetime.utcnow()
-        )
-        
-        await user.send(embed=embed)
-        
+    except ValueError as e:
+        await interaction.response.send_message(f"❌ Invalid time format: {e}\n\nExamples: `30m`, `2h`, `1d`", ephemeral=True)
     except Exception as e:
-        logger.error(f"Error sending reminder: {e}")
+        await interaction.response.send_message(f"❌ Error setting reminder: {e}", ephemeral=True)
+
+# Error handling for voice channel commands
+@force_mute.error
+@make_private.error
+@make_public.error
+@set_max_members.error
+@set_description.error
+@invite_user.error
+async def voice_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
+    if isinstance(error, discord.app_commands.CheckFailure):
+        await interaction.response.send_message("❌ You need to be in a voice channel to use this command.", ephemeral=True)
 
 # Run the bot
 if __name__ == "__main__":
-    bot.run(DISCORD_TOKEN)
+    try:
+        bot.run(DISCORD_TOKEN)
+    except discord.LoginFailure:
+        logger.error("Invalid Discord token. Please check your DISCORD_TOKEN environment variable.")
+    except Exception as e:
+        logger.error(f"An error occurred while running the bot: {e}")
