@@ -2,6 +2,11 @@ name: DungeonKeeper Bot
 
 on:
   workflow_dispatch:       # manual start
+  push:
+    paths:
+      - 'main.py'         # trigger when main.py is updated
+    branches:
+      - main              # only on main branch
   schedule:
     - cron: "*/30 * * * *" # restart every 30 minutes
 
