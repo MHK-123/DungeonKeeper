@@ -1,0 +1,30 @@
+{
+    "bot_name": "DungeonKeeper",
+    "version": "1.0.0",
+    "description": "A comprehensive Discord bot for study communities with staff support, voice management, and productivity features",
+    "features": [
+        "Staff Support System",
+        "Voice Channel Management",
+        "Study & Productivity Features",
+        "XP System",
+        "Pomodoro Timer",
+        "Reminder System"
+    ],
+    "permissions": {
+        "required": [
+            "Send Messages",
+            "Use Slash Commands",
+            "Manage Channels",
+            "Mute Members",
+            "Create Instant Invite",
+            "Read Message History",
+            "Send Messages in Threads"
+        ]
+    },
+    "settings": {
+        "max_reminder_days": 7,
+        "pomodoro_xp_reward": 10,
+        "case_auto_archive_hours": 24,
+        "support_timeout_minutes": 5
+    }
+}
