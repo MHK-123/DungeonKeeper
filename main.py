@@ -72,6 +72,15 @@ class DungeonKeeper(commands.Bot):
         """Called when bot is ready"""
         logger.info(f'{self.user} has logged in!')
         print(f'DungeonKeeper is online as {self.user}')
+        
+        # Set bot status to online
+        await self.change_presence(
+            status=discord.Status.online,
+            activity=discord.Activity(
+                type=discord.ActivityType.watching, 
+                name="for support requests"
+            )
+        )
 
     async def on_message(self, message):
         """Handle DM messages for staff support"""
